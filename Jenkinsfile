@@ -14,8 +14,8 @@
 def buildAgentName(String jobNameWithNamespace, String buildNumber, String namespace) {
     def jobName = removeNamespaceFromJobName(jobNameWithNamespace, namespace);
 
-    if (jobName.length() > 55) {
-        jobName = jobName.substring(0, 55);
+    if (jobName.length() > 52) {
+        jobName = jobName.substring(0, 52);
     }
 
     return "a.${jobName}${buildNumber}".replace('_', '-').replace('/', '-').replace('-.', '.');
@@ -121,6 +121,12 @@ spec:
     node(buildLabel) {
         container(name: 'node', shell: '/bin/bash') {
             checkout scm
+            stage('Setup') {
+                sh '''#!/bin/bash
+                    echo "IMAGE_NAME=$(basename -s .git `git config --get remote.origin.url` | tr '[:upper:]' '[:lower:]' | sed 's/_/-/g')" > ./env-config
+                    chmod a+rw ./env-config
+                '''
+            }
             stage('Build') {
                 sh '''#!/bin/bash
                     npm install
@@ -135,11 +141,6 @@ spec:
             stage('Publish pacts') {
                 sh '''#!/bin/bash
                     npm run pact:publish --if-present
-                '''
-            }
-            stage('Verify pact') {
-                sh '''#!/bin/bash
-                    npm run pact:verify --if-present
                 '''
             }
             stage('Sonar scan') {
@@ -175,12 +176,14 @@ spec:
                         PRE_RELEASE="--preRelease=${BRANCH}"
                     fi
 
-                    release-it patch --ci --no-npm ${PRE_RELEASE} \
-                      --hooks.after:release='echo "IMAGE_VERSION=${version}" > ./env-config' \
+                    release-it patch ${PRE_RELEASE} \
+                      --ci \
+                      --no-npm \
+                      --no-git.requireCleanWorkingDir \
                       --verbose \
                       -VV
 
-                    echo "IMAGE_NAME=$(basename -s .git `git config --get remote.origin.url` | tr '[:upper:]' '[:lower:]' | sed 's/_/-/g')" >> ./env-config
+                    echo "IMAGE_VERSION=$(git describe --abbrev=0 --tags)" >> ./env-config
 
                     cat ./env-config
                 '''
@@ -267,11 +270,13 @@ spec:
 
                     if [[ "${CLUSTER_TYPE}" == "openshift" ]]; then
                         ROUTE_HOST=$(kubectl get route/${IMAGE_NAME} --namespace ${ENVIRONMENT_NAME} --output=jsonpath='{ .spec.host }')
-                        URL="https://${ROUTE_HOST}"
+                        export URL="https://${ROUTE_HOST}"
                     else
                         INGRESS_HOST=$(kubectl get ingress/${IMAGE_NAME} --namespace ${ENVIRONMENT_NAME} --output=jsonpath='{ .spec.rules[0].host }')
-                        URL="http://${INGRESS_HOST}"
+                        export URL="http://${INGRESS_HOST}"
                     fi
+
+                    echo "PROVIDER_URL=${URL}" >> ./env-config
 
                     # sleep for 10 seconds to allow enough time for the server to start
                     sleep 30
@@ -285,10 +290,23 @@ spec:
                     fi;
                 '''
             }
+        }
+        container(name: 'node', shell: '/bin/bash') {
+            stage('Verify pact') {
+                sh '''#!/bin/bash
+                    . ./env-config
+
+                    cat ./env-config
+
+                    npm run pact:verify --if-present -- -p ${PROVIDER_URL} -n ${IMAGE_NAME}
+                '''
+            }
+        }
+        container(name: 'ibmcloud', shell: '/bin/bash') {
             stage('Package Helm Chart') {
                 sh '''#!/bin/bash
 
-                if [[ -z "${ARTIFACTORY_ENCRYPT}" ]]; then
+                if [[ -z "${ARTIFACTORY_URL}" ]]; then
                   echo "Skipping Artifactory step as Artifactory is not installed or configured"
                   exit 0
                 fi
