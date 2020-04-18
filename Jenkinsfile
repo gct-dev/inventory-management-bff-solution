@@ -1,4 +1,4 @@
-def pipelineVersion='1.1.1'
+def pipelineVersion='1.1.3'
 println "Pipeline version: ${pipelineVersion}"
 /*
  * This is a vanilla Jenkins pipeline that relies on the Jenkins kubernetes plugin to dynamically provision agents for
@@ -226,8 +226,10 @@ spec:
                     git fetch --tags
                     git tag -l
 
+                    COMMIT_HASH=$(git rev-parse HEAD)
                     git checkout -b ${BRANCH} --track origin/${BRANCH}
                     git branch --set-upstream-to=origin/${BRANCH} ${BRANCH}
+                    git reset --hard ${COMMIT_HASH}
 
                     git config --global user.name "Jenkins Pipeline"
                     git config --global user.email "jenkins@ibmcloud.com"
